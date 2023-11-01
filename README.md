@@ -914,6 +914,78 @@ class ApplicationJob < ActiveJob::Base
 end
 ```
 
+### Querying Jobs
+
+Jobs are contained in the mounted GoodJob::Job table. The schema is:
+
+```
+GoodJob::Job < GoodJob::Execution {
+                     :id => :uuid,
+             :queue_name => :text,
+               :priority => :integer,
+      :serialized_params => :jsonb,
+           :scheduled_at => :datetime,
+           :performed_at => :datetime,
+            :finished_at => :datetime,
+                  :error => :text,
+             :created_at => :datetime,
+             :updated_at => :datetime,
+          :active_job_id => :uuid,
+        :concurrency_key => :text,
+               :cron_key => :text,
+    :retried_good_job_id => :uuid,
+                :cron_at => :datetime
+}
+```
+
+Most of the relevant information to identify a job is in its `serialized_params` field which looks something like:
+```
+{
+                  "job_id" => "dffd4af9-d4ed-482f-acb6-04cf757ff9b8",
+                  "locale" => "en",
+                "priority" => 0,
+                "timezone" => "UTC",
+               "arguments" => [1234],
+               "job_class" => "DoSomeThingJob",
+              "executions" => 0,
+              "queue_name" => "urgent",
+             "enqueued_at" => "2023-10-27T00:09:37Z",
+         "provider_job_id" => nil,
+    "exception_executions" => {}
+}
+```
+
+You can query via parameters in the `serialized_parameters` field using normal Postgres JSON operations:
+```
+jobs = GoodJob::Job
+  .where("serialized_params ->> 'job_class' = 'DoSomeThingJob'")
+```
+
+GoodJob provides some scopes for finding jobs by common identifiers. Eg. to find a job by job-class without manually querying serialized parameters, you can instead query via the `job_class` scope:
+```
+jobs = GoodJob::Job.job_class('DoSomeThingJob')
+```
+
+Other scopes include:
+- `running`
+- `finished` - jobs that have been completed (with or without an error) and will not be re-run
+- `scheduled` - jobs that have not run yet and will run in the future
+- `retried` - jobs that have attempted to run at least once, did not complete, and will run again in the future
+- `queued` - jobs whose scheduled time to run has passed and will run when a thread to run them becomes available
+- `succeeded` - jobs that have run without an error
+- `discarded` - jobs that encountered an error while running and wil not be retried
+
+### Dequeuing Jobs
+
+Jobs can be dequeued by deleting them out of the Jobs table:
+
+```
+GoodJob::Job
+  .job_class("<JobNameHere>") # Filter to a particular job type
+  .where(finished_at: nil) # Filter to enqueued jobs, ignoring those that have previously completed
+  .delete_all # Or `.each(&:destroy)` for Rails callback support (at the expense of speed)
+```
+
 ### Optimize queues, threads, and processes
 
 By default, GoodJob creates a single thread execution pool that will execute jobs from any queue. Depending on your application's workload, job types, and service level objectives, you may wish to optimize execution resources. For example, providing dedicated execution resources for transactional emails so they are not delayed by long-running batch jobs. Some options:
